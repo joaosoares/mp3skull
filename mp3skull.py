@@ -4,9 +4,12 @@ from bs4 import BeautifulSoup
 from urlparse import urlsplit, urlparse
 from threading import Thread
 from Queue import Queue
+from subprocess import call
 from progressbar import *
 import argparse, os, requests, logging, re
 import xml.etree.ElementTree as ET
+import cmd2 as cmd
+
 
 class CLI:
     def __init__(self, search_terms):
@@ -109,7 +112,7 @@ class Query:
     '''
     Class to store and modify a single search result as a list.
     '''
-    def __init__(self, query):
+    def __init__(self, query, *args, **kwargs):
         self.query=query
         self.raw_results = self.get_raw_results(self.query)
         self.results = []
@@ -186,7 +189,8 @@ class Query:
                 if entry:
                     self.results.append(entry)
                 self.last_checked += self.last_checked
-
+    def get(self, index):
+        return self.results[index]
 
     def filter(self, raw_results):
         results = []
@@ -205,27 +209,104 @@ class Query:
             sys.exit(1)
         return results
 
-class MusicBrainzSearch:
-    '''
-    Search the MusicBrainz API
-    '''
-    def __init__():
-        pass
-    def search(query):
-        r = requests.get()
+class App(cmd.Cmd):
+    """Simple example"""
     
+    prompt = '>> '
+    intro = "Welcome to the Music Downloader! Please type 'search' followed by your query to look for a song, 'queue' to see and download your queue."
+    
+    def __init__(self, *args, **kwargs):
+        cmd.Cmd.__init__(self, *args, **kwargs)
+        self.queue = []
 
+    @cmd.options([cmd.make_option('-q', '--queue', action="store_true", help="Queue results and download later")
+        ])
+    def do_search(self, term, opts=None):
+        term = ''.join(term)
+        if term:
+            print(self.colorize(("searching for %s" % term), 'blue'))
+            query = Query(term)
+            choice = self.select(self.get_select(query), 'Which one? ') - 1 # adjust for list start at index 0
+            action = self.select("play queue download", 'What do you want to do with the file "%s"? ' % choice)
+            if action == "download":
+                print "Downloading..."
+                self.download(query.get(choice))
+            elif action == "queue":
+                self.queue.append(query.get(choice))
+                print "Added to queue"
+            elif action == "play":
+                call("mplayer \"%s\"" % query.get(choice)['url'])
+                print "Finished playing."
+        else:
+            print "please specify a query"
 
+    def do_artist(self, query):
+        print "artist %s" % query 
+
+    def do_song(self, query):
+        print "song %s" % query
+    
+    def do_queue(self, query):
+        if len(self.queue) > 0:
+            print("Items in queue:")
+            for item in self.queue:
+                print item['title']
+            choice = self.select("Yes No", "Download all items from queue? ")
+            if choice == "Yes":
+                print "Alright. Downloading all songs..."
+                for item in self.queue:
+                    self.download(item)
+            elif choice == "No":
+                print "Okay. I get it."
+        else:
+            print("queue is empty")
+    def get_select(self, query):
+        tuples = []
+        i = 1
+        for item in query.get_results(10):
+            tuples.append((i, item['title']))
+            i += 1
+        return tuples
+
+    def download(self, result, local_filename = None):
+        '''Downloads from URL'''
+        def url2name(url):
+            return os.path.basename(urlsplit(url)[2])
+        r = requests.get(result['url'], stream=True)
+        # File naming
+        filename = result['title']+".mp3"
+        if local_filename:
+            filename = local_filename
+    
+        # Getting file size
+        total_size = int(r.headers["Content-Length"].strip())
+        downloaded = 0
+        # Progress bar
+        widgets = [filename, ": ", Bar(marker="|", left="[", right=" "),
+                Percentage(), " ", FileTransferSpeed(), "] ", str(downloaded),
+                " of {0}MB".format(round(total_size / 1024 / 1024 , 2))]
+        pbar = ProgressBar(widgets=widgets, maxval=total_size)
+        pbar.start()
+
+        with open(filename, 'wb') as fp:
+            for chunk in r.iter_content(512):
+                if chunk:
+                    fp.write(chunk)
+                    downloaded += len(chunk)
+                    pbar.update(downloaded)
+        pbar.finish()
+ 
 if __name__ == '__main__':
     # set up logging
     logging.basicConfig(level=logging.DEBUG)
     
     # Command line options
-    parser = argparse.ArgumentParser(description='Search and download mp3s from mp3skull.')
-    parser.add_argument('query', type=str, nargs='+')
-    args = parser.parse_args()
+#    parser = argparse.ArgumentParser(description='Search and download mp3s from mp3skull.')
+#    parser.add_argument('query', type=str, nargs='+')
+#    args = parser.parse_args()
     
-    # Start command line interface
-    search = CLI(' '.join(args.query))
+    App().cmdloop()
 
+    # Start command line interface
+#    search = CLI(' '.join(args.query))
 #    search.display_results(search.results)
